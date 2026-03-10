@@ -309,7 +309,7 @@ def build_command(
         "--fallback",
         "1" if args.fallback else "0",
         "--optimize-text",
-        "0",
+        "1", # <--- CHANGED FROM 0 TO 1 HERE
         "--correct-text-visibility",
         str(args.correct_text_visibility),
         "--embed-external-font",
@@ -384,6 +384,30 @@ def main() -> int:
 
     if not output_html.exists():
         fail(f"Conversion finished but output file was not created: {output_html}")
+
+    # --- INJECT CONTENTEDITABLE CAPABILITIES HERE ---
+    print("Injecting editor capabilities...")
+    editor_script = """
+    <script>
+    document.addEventListener("DOMContentLoaded", function() {
+        // pdf2htmlEX uses the 't' class for text containers
+        const textElements = document.querySelectorAll('.t');
+        
+        textElements.forEach(el => {
+            el.setAttribute('contenteditable', 'true');
+            
+            // Optional: Add some visual feedback when clicking a line
+            el.style.outline = 'none';
+            el.addEventListener('focus', () => { el.style.backgroundColor = 'rgba(255, 255, 0, 0.2)'; });
+            el.addEventListener('blur', () => { el.style.backgroundColor = 'transparent'; });
+        });
+    });
+    </script>
+    """
+    
+    with open(output_html, "a", encoding="utf-8") as f:
+        f.write(editor_script)
+    # ------------------------------------------------
 
     print(f"\nDone: {output_html}")
     return 0
