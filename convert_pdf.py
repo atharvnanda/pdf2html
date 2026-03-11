@@ -317,7 +317,7 @@ def build_command(
         "--fallback",
         "1" if args.fallback else "0",
         "--optimize-text",
-        "1", # Required for better word grouping
+        "0", # 1 for better word grouping
         "--correct-text-visibility",
         str(args.correct_text_visibility),
         "--embed-external-font",
@@ -452,86 +452,98 @@ def main() -> int:
             const pageBoxes = yoloData[pageIndex];
             if (!pageBoxes) return;
             
-            // Allow relative positioning context
             pageContainer.style.position = 'relative';
             
+            // FIX: Mark all text elements as 'unclaimed' initially
+            const allTextElements = pageContainer.querySelectorAll('.t');
+            allTextElements.forEach(el => el.dataset.claimed = 'false');
+            
             pageBoxes.forEach(box => {{
-                // Get absolute dimensions of the page in the browser
                 const pageRect = pageContainer.getBoundingClientRect();
-                
-                // Translate normalized YOLO coordinates to browser pixels
                 const domX1 = box.nx1 * pageRect.width;
                 const domY1 = box.ny1 * pageRect.height;
                 const domX2 = box.nx2 * pageRect.width;
                 const domY2 = box.ny2 * pageRect.height;
                 
                 let textNodes = [];
-                let textContent = "";
                 
-                // Find all pdf2htmlEX text elements
-                const textElements = pageContainer.querySelectorAll('.t');
-                textElements.forEach(el => {{
+                // Find elements belonging to this box
+                allTextElements.forEach(el => {{
+                    // FIX: Only process if it hasn't been claimed by another box yet
+                    if (el.dataset.claimed === 'true') return;
+
                     const elRect = el.getBoundingClientRect();
-                    
-                    // Calculate center point of the text element relative to the page
                     const relX = elRect.left - pageRect.left + (elRect.width / 2);
                     const relY = elRect.top - pageRect.top + (elRect.height / 2);
                     
-                    // If the text's center falls inside the YOLO box, it belongs to this paragraph
                     if (relX >= domX1 && relX <= domX2 && relY >= domY1 && relY <= domY2) {{
-                        textNodes.push(el);
-                        textContent += el.textContent + " ";
+                        el.dataset.claimed = 'true'; // Lock it!
+                        
+                        // Store the element and its exact vertical position for sorting
+                        textNodes.push({{
+                            element: el,
+                            text: el.textContent,
+                            top: elRect.top
+                        }});
                     }}
                 }});
                 
                 if (textNodes.length > 0) {{
-                    // Create the new Master Editable Block
+                    // FIX: Because we reverted to optimize-text=0, we must sort the text 
+                    // nodes strictly from top-to-bottom so the sentences read correctly.
+                    textNodes.sort((a, b) => a.top - b.top);
+                    
+                    // Combine the text with spaces
+                    const textContent = textNodes.map(node => node.text).join(" ");
+                    
                     const editableBlock = document.createElement('div');
                     editableBlock.setAttribute('contenteditable', 'true');
                     
-                    // Style it using percentages so it remains perfectly responsive if the window resizes
                     editableBlock.style.position = 'absolute';
                     editableBlock.style.left = (box.nx1 * 100) + '%';
                     editableBlock.style.top = (box.ny1 * 100) + '%';
                     editableBlock.style.width = ((box.nx2 - box.nx1) * 100) + '%';
                     editableBlock.style.minHeight = ((box.ny2 - box.ny1) * 100) + '%';
                     
-                    // Core Editor CSS properties
                     editableBlock.style.zIndex = '100'; 
-                    editableBlock.style.backgroundColor = 'rgba(255, 255, 255, 0.001)'; // Invisible but clickable
+                    editableBlock.style.backgroundColor = 'rgba(255, 255, 255, 0.001)';
                     editableBlock.style.outline = 'none';
                     editableBlock.style.cursor = 'text';
-                    editableBlock.style.whiteSpace = 'pre-wrap'; // Crucial for text wrapping
+                    editableBlock.style.whiteSpace = 'pre-wrap'; 
                     
-                    // Steal the font styles from the first text node it swallowed
-                    const baseStyle = window.getComputedStyle(textNodes[0]);
+                    // FIX: Find the most representative text node (the longest one)
+                    // This prevents stealing styles from a giant 1-character quotation mark!
+                    let representativeNode = textNodes[0];
+                    let maxLength = 0;
+                    textNodes.forEach(node => {{
+                        if (node.text.length > maxLength) {{
+                            maxLength = node.text.length;
+                            representativeNode = node;
+                        }}
+                    }});
+                    
+                    // Steal the font styles from the REPRESENTATIVE node
+                    const baseStyle = window.getComputedStyle(representativeNode.element);
                     editableBlock.style.fontFamily = baseStyle.fontFamily;
                     editableBlock.style.color = baseStyle.color;
                     
-                    // FIX: Measure the actual rendered height instead of the CSS font-size
-                    const actualHeight = textNodes[0].getBoundingClientRect().height;
-                    
-                    // Set font size to roughly match the physical height (0.8 adjusts for standard line-height)
+                    const actualHeight = representativeNode.element.getBoundingClientRect().height;
                     editableBlock.style.fontSize = (actualHeight * 0.8) + 'px';
                     editableBlock.style.lineHeight = '1.2';
-                    
-                    // Keep it contained
                     editableBlock.style.boxSizing = 'border-box';
-                    editableBlock.style.overflow = 'hidden'; // Hides overflow until you click into it
+                    editableBlock.style.overflow = 'hidden'; 
                     
-                    // Insert merged text
                     editableBlock.innerText = textContent.trim();
                     
-                    // Visual feedback when editing
                     editableBlock.addEventListener('focus', () => {{ editableBlock.style.backgroundColor = 'rgba(255, 255, 0, 0.2)'; }});
                     editableBlock.addEventListener('blur', () => {{ editableBlock.style.backgroundColor = 'rgba(255, 255, 255, 0.001)'; }});
                     
                     pageContainer.appendChild(editableBlock);
                     
-                    // Render original disconnected lines invisible (but don't delete to preserve CSS layouts)
-                    textNodes.forEach(el => {{
-                        el.style.opacity = '0';
-                        el.style.pointerEvents = 'none'; // Prevent them from stealing clicks
+                    // Hide original text
+                    textNodes.forEach(node => {{
+                        node.element.style.opacity = '0';
+                        node.element.style.pointerEvents = 'none';
                     }});
                 }}
             }});
